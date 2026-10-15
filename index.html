@@ -56,8 +56,12 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--gold); outline-
 .tools { display: flex; align-items: center; gap: 4px; }
 
 /* ---- stanza stage */
-.stage { flex: 1; min-height: 0; position: relative; padding: 2.2vh 16px 3vh; }
-.cols { height: 100%; display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); align-content: start; overflow: hidden; }
+.stage { flex: 1; min-height: 0; position: relative; padding: 2.2vh 16px 3vh; display:flex; flex-direction:column; }
+.section-title { flex:0 0 auto; color:#fff; font-size:clamp(24px, 3.2vw, 42px); line-height:1.15; font-weight:700; text-align:center; padding:0 2vw 2vh; }
+.section-title .title-lang { display:block; }
+.section-title .title-lang + .title-lang { margin-top:.12em; }
+.section-title [lang="ar"] { direction:rtl; }
+.cols { flex:1 1 auto; min-height:0; height:auto; display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); align-content: start; overflow: hidden; }
 .col {
   min-width: 0; padding: 0 2.4vw; font-size: var(--fs, 32px); line-height: 1.32; overflow-wrap: break-word; hyphens: manual;
 }
@@ -245,6 +249,7 @@ kbd { font-family: var(--sans); border: 1px solid var(--rule); border-radius: 4p
   </div>
   <div class="menu-view" id="menuView"></div>
   <div class="stage" id="stage" hidden>
+    <div class="section-title" id="sectionTitle" hidden aria-live="polite"></div>
     <div class="cols stanza" id="cols"></div>
     <div class="choice" id="choice" hidden></div>
     <button type="button" class="hubbtn" id="hubBtn" hidden></button>
@@ -25253,6 +25258,30 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
 (function () {
   "use strict";
   var SERVICES = window.SERVICE || [];
+  // Replace the old weekday picker with two direct entries. Their content is
+  // selected automatically from the current liturgical weekday.
+  var dailyMenuGroups = [];
+  var DAY_LABELS_ES = { dom: "Domingo", lun: "Lunes", mar: "Martes", mie: "Miércoles", jue: "Jueves", vie: "Viernes", sab: "Sábado" };
+  function splitDailyIds(ids, kind) {
+    return ids.filter(function (id) {
+      if (kind === "psali") return /^psali-/.test(id) || id === "lipon" || /^conclusion-psali/.test(id);
+      return /^(theo-|theotokia-|lobsh-)/.test(id) || /^conclusion-theotokia/.test(id) || id === "conclusion-adam" || id === "evangelio-m";
+    });
+  }
+  SERVICES.forEach(function (svc) {
+    var pickerId = svc.id === "alabanzas-vispera" ? "dia-menu-v" : (svc.id === "medianoche" ? "dia-menu" : null);
+    if (!pickerId) return;
+    var pickerIndex = svc.sections.findIndex(function (x) { return x.id === pickerId; });
+    if (pickerIndex < 0) return;
+    var picker = svc.sections[pickerIndex];
+    var dayMap = {};
+    (picker.choice || []).forEach(function (choice) { dayMap[choice.day] = choice.go; });
+    var suffix = svc.id === "alabanzas-vispera" ? "vispera" : "medianoche";
+    var psali = { id: "psali-dia-" + suffix, es: "Psali del día", en: "Daily Psali", ar: "", hub: [], then: null, menu: true, list: true, go: "Fin", goEn: "End", _dailyKind: "psali" };
+    var theo = { id: "theotokia-dia-" + suffix, es: "Theotokia del día", en: "Daily Theotokia", ar: "", hub: [], then: null, menu: true, list: true, go: "Fin", goEn: "End", _dailyKind: "theotokia" };
+    dailyMenuGroups.push({ svc: svc, dayMap: dayMap, psali: psali, theo: theo });
+    svc.sections.splice(pickerIndex, 1, psali, theo);
+  });
   var byId = {};                                   // section id -> {svc, sec, idx}
   SERVICES.forEach(function (svc) {
     svc.sections.forEach(function (sec, idx) { byId[sec.id] = { svc: svc, sec: sec, idx: idx }; });
@@ -25261,12 +25290,47 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
   var $ = function (id) { return document.getElementById(id); };
   function todayYmd() { var d = new Date(); return [d.getFullYear(), d.getMonth() + 1, d.getDate()]; }
   var app = $("app"), stage = $("stage"), cols = $("cols"), choiceEl = $("choice"), menuView = $("menuView");
-  var state = { svc: SERVICES[0], cur: null, history: [], level: 3, bishop: false, secret: false, office: "v", day: "dom", hubCtx: null, hubLast: {}, hubSeen: {}, rdate: todayYmd(), langs: { es: true, cop: true, en: true, ar: true } };
+  var state = { svc: SERVICES[0], cur: null, history: [], level: 3, bishop: false, secret: false, office: "v", day: "dom", transitionTime: "18:00", hubCtx: null, hubLast: {}, hubSeen: {}, rdate: todayYmd(), langs: { es: true, cop: true, en: true, ar: true } };
   try {
     var saved = JSON.parse(localStorage.getItem("servicios-prefs") || "null");
-    if (saved) { state.bishop = !!saved.bishop; if (saved.office === "m") state.office = "m"; if (saved.day) state.day = saved.day; if (typeof saved.level === "number") state.level = Math.max(0, Math.min(6, saved.level)); if (saved.langs) { state.langs = saved.langs; if (!("ar" in state.langs)) state.langs.ar = true; } }
+    if (saved) { state.bishop = !!saved.bishop; if (saved.office === "m") state.office = "m"; if (saved.day) state.day = saved.day; if (saved.transitionTime) state.transitionTime = saved.transitionTime; if (typeof saved.level === "number") state.level = Math.max(0, Math.min(6, saved.level)); if (saved.langs) { state.langs = saved.langs; if (!("ar" in state.langs)) state.langs.ar = true; } }
   } catch (e) {}
-  function save() { try { localStorage.setItem("servicios-prefs", JSON.stringify({ level: state.level, bishop: state.bishop, office: state.office, day: state.day, langs: state.langs })); } catch (e) {} }
+  function save() { try { localStorage.setItem("servicios-prefs", JSON.stringify({ level: state.level, bishop: state.bishop, office: state.office, day: state.day, transitionTime: state.transitionTime, langs: state.langs })); } catch (e) {} }
+  // Coptic day boundary: Vespers stays on the civil weekday; Midnight Praises
+  // advances to the following weekday once the configured transition time passes.
+  var WEEK_KEYS = ["dom", "lun", "mar", "mie", "jue", "vie", "sab"];
+  function dayKeyForDate(date) { return WEEK_KEYS[date.getDay()]; }
+  function transitionHasPassed(date) {
+    var parts = String(state.transitionTime || "18:00").split(":").map(Number);
+    var mins = (parts[0] || 0) * 60 + (parts[1] || 0);
+    return date.getHours() * 60 + date.getMinutes() >= mins;
+  }
+  function dayKeyForService(svc, date) {
+    var d = new Date(date.getTime());
+    if (svc && svc.id === "medianoche" && transitionHasPassed(d)) d.setDate(d.getDate() + 1);
+    return dayKeyForDate(d);
+  }
+  function syncAutomaticDay(svc) {
+    var next = dayKeyForService(svc || state.svc, new Date());
+    if (next && state.day !== next) state.day = next;
+  }
+  function syncDailyMenus(svc) {
+    var now = new Date();
+    dailyMenuGroups.forEach(function (group) {
+      if (svc && group.svc !== svc) return;
+      var key = dayKeyForService(group.svc, now);
+      var sourceId = group.dayMap[key];
+      var source = sourceId && group.svc.sections.filter(function (x) { return x.id === sourceId; })[0];
+      var ids = source && source.hub ? source.hub : [];
+      group.psali.hub = splitDailyIds(ids, "psali");
+      group.theo.hub = splitDailyIds(ids, "theotokia");
+      var dayName = DAY_LABELS_ES[key] || "hoy";
+      group.psali.es = "Psali del " + dayName;
+      group.psali.en = "Daily Psali · " + dayName;
+      group.theo.es = "Theotokia del " + dayName;
+      group.theo.en = "Daily Theotokia · " + dayName;
+    });
+  }
 
   /* A leading speaker label (Sacerdote: / Ⲡⲓⲟⲩⲏⲃ: / Priest:) is shown in gold, like the colored labels in the original deck. */
   var SPEAKER = /^(El Sacerdote|El Diácono|La Asamblea|People|Ⲡⲓⲡ̀ⲣⲉⲥⲃⲩⲧⲉⲣⲟⲥ|Congregación|Congregation|Sacerdote|Priest|Diácono|Deacon|Lector|Reader|Obispo|Bishop|Ⲡⲓⲗⲁⲟⲥ|Ⲡⲓⲟⲩⲏⲃ|Ⲡⲓⲇⲓⲁⲕⲱⲛ|Ⲡⲓⲁ̀ⲛⲁⲅⲛⲱⲥⲧⲏⲥ|Ⲡⲓⲉ̀ⲡⲓⲥⲕⲟⲡⲟⲥ|الكاهن|الشماس|الشعب|القارئ|الأسقف)(?:\s*\([^)]{1,20}\))?:\s*/;
@@ -25281,7 +25345,9 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
   function officeOk(sec) { return !sec.office || sec.office === state.office; }
   // day of the week (Midnight Praises): onlyDays / skipDays apply to the main flow and the menu
   function dayOk(sec) {
-    return (!sec.onlyDays || sec.onlyDays.indexOf(state.day) >= 0) && (!sec.skipDays || sec.skipDays.indexOf(state.day) < 0);
+    var owner = byId[sec.id] && byId[sec.id].svc;
+    var day = dayKeyForService(owner || state.svc, new Date());
+    return (!sec.onlyDays || sec.onlyDays.indexOf(day) >= 0) && (!sec.skipDays || sec.skipDays.indexOf(day) < 0);
   }
   function sectionOk(sec) { return officeOk(sec) && dayOk(sec); }
   function dayName() {
@@ -25326,6 +25392,8 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
   /* ---------- menu */
   function renderMenu() {
     var svc = state.svc;
+    syncAutomaticDay(svc);
+    syncDailyMenus(svc);
     var h = '<div class="menu-inner">' +
       '<div class="diocese">Diócesis Copta Ortodoxa de Bolivia</div>' +
       '<svg class="cross" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M10 2h4v4h4v4h-4v12h-4V10H6V6h4z"/></svg>';
@@ -25347,47 +25415,62 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
       });
       h += '</div>';
     }
-    if (svc.days) {
-      h += '<div class="office days" role="radiogroup" aria-label="Día">';
-      svc.days.forEach(function (o) {
-        h += '<button type="button" role="radio" data-day="' + o.k + '" aria-checked="' + (o.k === state.day) + '"><b>' + esc(o.es) + '</b><small>' + esc(o.en) + '</small></button>';
-      });
-      h += '</div>';
-    }
-    if (window.LECT && svc.sections.some(function (x) { return x.rd; })) {
+    if (window.LECT) {
       var isToday = todayYmd().join("-") === state.rdate.join("-");
       h += '<div class="rdate"><label for="rdate"><b>Lecturas del día</b><small>Readings of the day</small></label>' +
         '<input type="date" id="rdate" value="' + rdateIso() + '"><button type="button" class="today" id="rtoday"' + (isToday ? ' disabled' : '') + '>Hoy · Today</button>' +
         '<div class="rinfo">' + rdateInfo() + '</div></div>';
     }
-    var part = svc.parts && state.part != null ? svc.parts[state.part] : null;
-    h += '<div class="menu-title"><h1>' + esc(svc.es) + '</h1><p>' + esc(svc.en) + '</p></div>';
-    if (svc.parts && !part) {                 // the service is split in parts: first choose one
-      h += '<div class="parts">';
-      svc.parts.forEach(function (pt, k) {
-        h += '<button type="button" class="partbtn" data-part="' + k + '"' + (pt.ids.length ? '' : ' disabled') + '><b>' + esc(pt.es) + '</b><span>' + esc(pt.en) + '</span>' +
-          (pt.ids.length ? '' : '<small>Próximamente · Coming soon</small>') + '</button>';
-      });
-      h += '</div>';
+    var partIndex = null;
+    if (svc.parts && svc.parts.length) {
+      partIndex = state.part != null && svc.parts[state.part] ? state.part : 0;
+      if (state.part == null) state.part = partIndex;
     }
-    if (part) h += '<button type="button" class="backpart" id="backPart">← ' + esc(svc.es) + '</button><div class="menu-title"><h1 style="font-size:clamp(26px,4vw,44px)">' + esc(part.es) + '</h1><p>' + esc(part.en) + '</p></div>';
-    h += '<div class="list">';
-    svc.sections.forEach(function (sec) {
-      if (svc.parts && (!part || part.ids.indexOf(sec.id) < 0)) return;
-      if (sec.part && !svc.parts) h += '<div class="part">' + esc(sec.part.es) + ' · ' + esc(sec.part.en) + '</div>';
-      if (sec.menu === false || !sectionOk(sec)) return;
+    var part = svc.parts && partIndex != null ? svc.parts[partIndex] : null;
+    h += '<div class="menu-title"><h1>' + esc(svc.es) + '</h1><p>' + esc(svc.en) + '</p></div>';
+
+    function itemMarkup(sec) {
+      if (sec.menu === false || !sectionOk(sec)) return '';
       var n = sec.choice ? '<span class="n choice-n">' + sec.choice.map(function (o) { return esc(o.es.split(" (")[0]); }).join(" / ") + '</span>'
                          : sec.hub ? '<span class="n choice-n">☰</span>' : '';
-      h += '<button class="item" type="button" data-id="' + esc(sec.id) + '">' +
+      return '<button class="item" type="button" data-id="' + esc(sec.id) + '">' +
         '<span class="es">' + esc(sec.es) + '</span>' + (sec.esAI ? '<span class="ai">Español: traducción IA · por revisar</span>' : '') +
         (sec.cop ? '<span class="cop" lang="cop">' + esc(sec.cop) + '</span>' : '') +
         '<span class="en">' + esc(sec.en) + '</span>' + (sec.ar ? '<span class="ar" lang="ar" dir="rtl">' + esc(sec.ar) + '</span>' : '') + n + '</button>';
-    });
-    h += '</div><p class="hint">Avance con <kbd>→</kbd>, <kbd>Espacio</kbd> o el control remoto; retroceda con <kbd>←</kbd>. ' +
-      'En pantalla táctil, toque la derecha para avanzar y la izquierda para retroceder. <kbd>M</kbd> vuelve a este menú.</p></div>';
+    }
+
+    if (svc.parts && part) {
+      // Split-pane service browser: service parts stay on the left, selected part's
+      // content stays in its own scrollable pane on the right.
+      h += '<div class="service-split">';
+      h += '<nav class="service-part-list" aria-label="Partes del servicio">';
+      svc.parts.forEach(function (pt, k) {
+        h += '<button type="button" class="partbtn' + (k === partIndex ? ' active' : '') + '" data-part="' + k + '"' +
+          (pt.ids.length ? '' : ' disabled') + ' aria-pressed="' + (k === partIndex) + '">' +
+          '<b>' + esc(pt.es) + '</b><span>' + esc(pt.en) + '</span>' +
+          (pt.ids.length ? '' : '<small>Próximamente · Coming soon</small>') + '</button>';
+      });
+      h += '</nav><section class="service-part-content" aria-label="' + esc(part.es) + '">';
+      h += '<div class="part-heading"><h2>' + esc(part.es) + '</h2><p>' + esc(part.en) + '</p></div><div class="list">';
+      svc.sections.forEach(function (sec) {
+        if (part.ids.indexOf(sec.id) >= 0) h += itemMarkup(sec);
+      });
+      h += '</div><p class="hint">Seleccione una parte a la izquierda para cambiar de sección. Use <kbd>→</kbd> para avanzar y <kbd>←</kbd> para volver.</p>';
+      h += '</section></div>';
+    } else {
+      if (!svc.parts) {
+        h += '<div class="list">';
+        svc.sections.forEach(function (sec) {
+          if (sec.part) h += '<div class="part">' + esc(sec.part.es) + ' · ' + esc(sec.part.en) + '</div>';
+          h += itemMarkup(sec);
+        });
+        h += '</div>';
+      }
+      h += '<p class="hint">Avance con <kbd>→</kbd>, <kbd>Espacio</kbd> o el control remoto; retroceda con <kbd>←</kbd>. En pantalla táctil, toque la derecha para avanzar y la izquierda para retroceder. <kbd>M</kbd> vuelve a este menú.</p>';
+    }
     menuView.innerHTML = h;
     menuView.querySelectorAll(".partbtn[data-part]").forEach(function (b) {
-      b.addEventListener("click", function () { state.part = +b.dataset.part; renderMenu(); menuView.scrollTop = 0; });
+      b.addEventListener("click", function () { state.part = +b.dataset.part; renderMenu(); var pane = menuView.querySelector(".service-part-content"); if (pane) pane.scrollTop = 0; });
     });
     if ($("backPart")) $("backPart").addEventListener("click", function () { state.part = null; renderMenu(); menuView.scrollTop = 0; });
     menuView.querySelectorAll(".item[data-id]").forEach(function (b) {
@@ -25406,16 +25489,22 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
       });
       $("rtoday").addEventListener("click", function () { state.rdate = todayYmd(); resetTurns(); renderMenu(); });
     }
-    menuView.querySelectorAll(".days button").forEach(function (b) {
-      b.addEventListener("click", function () { state.day = b.dataset.day; save(); renderMenu(); });
-    });
     menuView.querySelectorAll(".office:not(.days) button").forEach(function (b) {
       b.addEventListener("click", function () { state.office = b.dataset.office; state.hubLast = {}; state.hubSeen = {}; resetTurns(); save(); renderMenu(); });
     });
     menuView.querySelectorAll(".tabs button").forEach(function (b) {
-      b.addEventListener("click", function () { state.svc = SERVICES[+b.dataset.svc]; state.part = null; renderMenu(); menuView.scrollTop = 0; $("where").innerHTML = "<b>" + esc(state.svc.es) + "</b><span>" + esc(state.svc.en) + "</span>"; });
+      b.addEventListener("click", function () { state.svc = SERVICES[+b.dataset.svc]; syncAutomaticDay(state.svc); state.part = null; renderMenu(); menuView.scrollTop = 0; $("where").innerHTML = "<b>" + esc(state.svc.es) + "</b><span>" + esc(state.svc.en) + "</span>"; });
     });
   }
+
+  // The transition-time control lives in Preferences, outside the menu DOM.
+  document.addEventListener("change", function (event) {
+    if (!event.target || event.target.id !== "transitionTime") return;
+    state.transitionTime = event.target.value || "18:00";
+    syncAutomaticDay(state.svc);
+    syncDailyMenus(state.svc);
+    save(); resetTurns(); renderMenu();
+  });
 
   function showMenu() {
     state.part = null;
@@ -25463,6 +25552,7 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
     if (location.hash !== "#" + id) history.replaceState(null, "", "#" + id);
 
     if (sec.hub) {
+      var titleNode = $("sectionTitle"); if (titleNode) { titleNode.hidden = true; titleNode.innerHTML = ""; }
       // coming to this menu from outside its items starts the round again
       var from = push && state.history.length ? byId[state.history[state.history.length - 1].id] : null;
       if (from && !hubHas(sec.id, from.sec.id) && from.sec.id !== sec.id) { state.hubLast[sec.id] = null; state.hubSeen[sec.id] = {}; }
@@ -25473,6 +25563,7 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
     }
     choiceEl.classList.remove("hubscreen");
     if (sec.choice) {
+      var titleNode = $("sectionTitle"); if (titleNode) { titleNode.hidden = true; titleNode.innerHTML = ""; }
       cols.hidden = true; choiceEl.hidden = false;
       var h = '<h2>' + esc(sec.es) + '<small>' + esc(sec.en) + '</small></h2><div class="opts">';
       var dk = choiceDefault(sec);
@@ -25497,7 +25588,19 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
       return;
     }
     choiceEl.hidden = true; cols.hidden = false;
+    var titleNode = $("sectionTitle");
+    if (titleNode) {
+      var titleHtml = "";
+      ["es", "en", "ar"].forEach(function (k) {
+        if (state.langs[k] && sec[k]) titleHtml += '<span class="title-lang ' + k + '" lang="' + k + '"' + (k === "ar" ? ' dir="rtl"' : '') + '>' + esc(sec[k]) + '</span>';
+      });
+      titleNode.innerHTML = titleHtml;
+      // Section title is a one-time heading: show it only on the first page
+      // of this section, not on every subsequent presentation page.
+      titleNode.hidden = !titleHtml;
+    }
     var pages = paginate(sec), pi = findPage(pages, i, p || 0);
+    if (titleNode) titleNode.hidden = !titleHtml || pi !== 0;
     var pg = pages[pi], first = pg[0];
     state.cur = { id: id, i: first._i, p: first._p };
     render(pg, pg.langs || langsFor(sec));
@@ -25607,17 +25710,7 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
   function rdateInfo() {
     var d = dayR(); if (!d) return "";
     var c = d.coptic, f = d.title != null ? window.LECTURAS.feastNames : null;
-    var h = esc(c[0] + " " + MESCOP[c[1]] + " " + c[2]) + (f ? " · <b>" + esc(f.es[d.title] || "") + "</b>" : "") +
-      "<small>" + esc(c[0] + " " + MONCOP[c[1]] + " " + c[2] + (f ? " · " + (f.en[d.title] || "") : "")) + "</small>";
-    var L = d.sections.filter(function (x) { return x.t === "Liturgy"; })[0];
-    if (L) {
-      var refs = L.subs.filter(function (x) { return x.r || x.g; }).map(function (x) {
-        var ps = LECT.passage(x.r || x.g, "es"), out = "";
-        ps.forEach(function (p, n) { out += n === 0 ? p.bookName + " " + p.ref : (p.book === ps[n - 1].book ? "; " + p.ref : "; " + p.bookName + " " + p.ref); });
-        return out;
-      });
-      h += "<small>Misa: " + esc(refs.join(" · ")) + "</small>";
-    }
+    var h = esc(c[0] + " " + MESCOP[c[1]] + " " + c[2]) + (f ? " · <b>" + esc(f.es[d.title] || "") + "</b>" : "");
     return h;
   }
   function resetTurns() { SERVICES.forEach(function (v) { v.sections.forEach(function (x) { delete x._turns; }); }); pageCache = {}; }
@@ -25752,13 +25845,13 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
     if (sk >= 0) return sk;
     if (!sec.dayChoice) return 0;
     var k = -1;
-    sec.choice.forEach(function (o, n) { if (o.day === state.day && o.go) k = n; });
+    sec.choice.forEach(function (o, n) { if (o.day === dayKeyForService((byId[sec.id] || {}).svc || state.svc, new Date()) && o.go) k = n; });
     if (k < 0) sec.choice.forEach(function (o, n) { if (k < 0 && o.go) k = n; });
     return k;
   }
   function pickChoice(sec, k) {
     var o = sec.choice[k]; if (!o || !o.go) return;
-    if (sec.dayChoice && o.day) { state.day = o.day; save(); }
+    if (sec.dayChoice && o.day) { /* day is selected automatically from the current time and transition preference */ }
     if (o.ctx) { state.hubCtx = o.ctx; state.hubLast[o.ctx] = null; state.hubSeen[o.ctx] = {}; }
     show(o.go, 0, true);
   }
@@ -25880,5 +25973,284 @@ window.BIBLIA.ar = {"name":"الكتاب المقدس باللغة العربي�
   if (document.fonts) document.fonts.addEventListener("loadingdone", refresh);
 })();
 </script>
+
+
+<style id="app-format-refresh">
+  :root { --app-navy:#304763; --app-cream:#f6f1e4; }
+  html, body { height:100%; min-height:100%; }
+  body { overflow:hidden; }
+  .app { height:100dvh; min-height:0; display:flex; flex-direction:column; overflow:hidden; }
+  .bar { flex:0 0 auto; position:relative; z-index:5; padding: max(8px, env(safe-area-inset-top)) clamp(10px, 2vw, 24px) 8px; gap:10px; min-height:54px; box-sizing:border-box; backdrop-filter: blur(12px); }
+  .bar .where { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bar .tools { gap:8px; align-items:center; }
+  .bar .tools #langs, .bar .tools #smaller, .bar .tools #size, .bar .tools #bigger, .bar .tools #fsBtn { display:none !important; }
+  #prefsBtn { display:inline-flex; align-items:center; justify-content:center; width:42px; height:42px; padding:0; border-radius:12px; font-size:22px; line-height:1; }
+  .menu-view { flex:1 1 auto; min-height:0; overflow:auto; overscroll-behavior:contain; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .stage { flex:1 1 auto; min-height:0; height:auto; overflow:hidden; position:relative; box-sizing:border-box; padding-bottom: max(22px, env(safe-area-inset-bottom)); }
+  .cols { overscroll-behavior:contain; }
+  .reader-nav { position:absolute; z-index:4; top:50%; transform:translateY(-50%); width:48px; height:72px; border-radius:16px; border:1px solid var(--rule); background:color-mix(in srgb, var(--panel) 88%, transparent); color:var(--text); font-size:32px; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 18px #0002; opacity:.68; transition:opacity .15s, transform .15s; }
+  .reader-nav:hover, .reader-nav:focus-visible { opacity:1; transform:translateY(-50%) scale(1.04); }
+  #readerPrev { left:8px; } #readerNext { right:8px; }
+  .stage:not([hidden]) { padding-left:58px; padding-right:58px; }
+  .reader-bottom-nav { display:none; }
+  .prefs-backdrop { position:fixed; inset:0; z-index:1000; display:none; align-items:center; justify-content:center; padding:18px; background:#0b1728a8; backdrop-filter:blur(5px); }
+  .prefs-backdrop.open { display:flex; }
+  .prefs-panel { width:min(520px, 100%); max-height:min(82dvh, 700px); overflow:auto; background:var(--panel, #f8f4e9); color:var(--text, #24344b); border:1px solid var(--rule, #c8c0ae); border-radius:22px; box-shadow:0 24px 90px #0005; padding:22px; }
+  .prefs-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; }
+  .prefs-heading h2 { margin:0; font-size:clamp(24px,4vw,32px); }
+  #prefsClose { border-radius:50%; width:40px; height:40px; font-size:24px; }
+  .prefs-label { font-family:var(--sans, sans-serif); font-size:13px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:18px 0 8px; }
+  .prefs-controls { display:flex; flex-wrap:wrap; align-items:center; gap:9px; }
+  .prefs-controls .langs { display:flex !important; flex-wrap:wrap; }
+  .prefs-controls .size { display:inline-flex !important; }
+  .prefs-controls button { min-height:42px; }
+  .prefs-hint { font-family:var(--sans, sans-serif); font-size:14px; line-height:1.5; color:var(--muted); margin:18px 0 0; }
+  .bar .tools .count { font-variant-numeric:tabular-nums; white-space:nowrap; }
+  @media (max-width:700px) {
+    .bar { padding: max(6px, env(safe-area-inset-top)) 8px 6px; gap:6px; }
+    .bar .where { order:initial; flex:1 1 0; font-size:14px; }
+    .bar .btn.menu { min-height:40px; padding:8px 12px; }
+    #prefsBtn { width:40px; height:40px; }
+    .stage:not([hidden]) { padding:8px 8px 76px; }
+    .reader-nav { display:none; }
+    .reader-bottom-nav { display:flex; position:absolute; left:8px; right:8px; bottom:max(8px, env(safe-area-inset-bottom)); z-index:4; justify-content:space-between; gap:12px; }
+    .reader-bottom-nav button { flex:1; min-height:48px; border-radius:14px; border:1px solid var(--rule); background:var(--panel); color:var(--text); font-size:17px; font-family:var(--sans, sans-serif); font-weight:700; box-shadow:0 2px 10px #0001; }
+    .cols { max-height:100%; }
+    .prefs-panel { padding:18px; }
+  }
+  @media (max-width:380px) { .bar .where { max-width:42vw; } .bar .btn.menu { padding:7px 9px; } }
+
+  /* Fixed-height split menu for services that are divided into parts */
+  .menu-view:has(.service-split) { overflow:hidden; padding:10px clamp(10px, 1.5vw, 22px) max(8px, env(safe-area-inset-bottom)); }
+  .menu-inner:has(.service-split) { width:100%; max-width:none; height:100%; min-height:0; gap:10px; }
+  .menu-inner:has(.service-split) > .diocese,
+  .menu-inner:has(.service-split) > .cross { display:none; }
+  .menu-inner:has(.service-split) > .menu-title { flex:0 0 auto; gap:2px; }
+  .menu-inner:has(.service-split) > .menu-title h1 { font-size:clamp(25px, 3vw, 42px); }
+  .menu-inner:has(.service-split) > .menu-title p { font-size:clamp(13px, 1.4vw, 18px); }
+  .service-split { display:grid; grid-template-columns:minmax(210px, 0.36fr) minmax(0, 1fr); gap:14px; flex:1 1 auto; min-height:0; overflow:hidden; }
+  .service-part-list { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:2px 4px 8px 0; border-right:1px solid var(--rule); }
+  .service-part-list .partbtn { flex:0 0 auto; align-items:flex-start; text-align:left; padding:13px 14px; border-radius:12px; gap:4px; }
+  .service-part-list .partbtn b { font-size:clamp(16px, 1.7vw, 23px); line-height:1.2; }
+  .service-part-list .partbtn span { font-size:13px; line-height:1.25; }
+  .service-part-list .partbtn.active { border-color:var(--gold); background:var(--panel); box-shadow:inset 4px 0 0 var(--gold); }
+  .service-part-content { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+  .part-heading { flex:0 0 auto; padding:2px 10px 10px; border-bottom:1px solid var(--rule); }
+  .part-heading h2 { margin:0; color:var(--gold); font-size:clamp(21px, 2.5vw, 34px); line-height:1.15; }
+  .part-heading p { margin:3px 0 0; color:var(--muted); font:14px/1.3 var(--sans); }
+  .service-part-content .list { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; border-top:0; }
+  .service-part-content .item { padding:12px 10px; gap:3px 10px; }
+  .service-part-content .item .es { font-size:clamp(17px, 1.8vw, 24px); line-height:1.2; }
+  .service-part-content .item .en { font-size:14px; line-height:1.25; }
+  .service-part-content .hint { flex:0 0 auto; font-size:12px; padding:6px 8px 0; }
+  .menu-inner:has(.service-split) > .bishop-switch,
+  .menu-inner:has(.service-split) > .office,
+  .menu-inner:has(.service-split) > .rdate { flex:0 0 auto; }
+  @media (max-width:700px) {
+    .menu-view:has(.service-split) { padding:8px 8px max(8px, env(safe-area-inset-bottom)); }
+    .menu-inner:has(.service-split) { gap:8px; }
+    .service-split { grid-template-columns:minmax(118px, 0.39fr) minmax(0, 1fr); gap:8px; }
+    .service-part-list { gap:6px; padding-right:6px; }
+    .service-part-list .partbtn { padding:10px 8px; border-radius:10px; }
+    .service-part-list .partbtn b { font-size:15px; }
+    .service-part-list .partbtn span { font-size:11px; }
+    .part-heading { padding:2px 6px 8px; }
+    .part-heading h2 { font-size:20px; }
+    .part-heading p { font-size:12px; }
+    .service-part-content .item { grid-template-columns:minmax(0, 1fr); padding:10px 6px; }
+    .service-part-content .item .es { font-size:17px; }
+    .service-part-content .item .en { font-size:12px; }
+    .service-part-content .item .n { grid-row:auto; grid-column:auto; }
+    .service-part-content .hint { display:none; }
+    .menu-inner:has(.service-split) > .office,
+    .menu-inner:has(.service-split) > .bishop-switch { font-size:12px; }
+  }
+  @media (max-width:380px) {
+    .service-split { grid-template-columns:minmax(104px, 0.38fr) minmax(0, 1fr); gap:5px; }
+    .service-part-list .partbtn b { font-size:13px; }
+    .service-part-list .partbtn span { display:none; }
+    .part-heading h2 { font-size:17px; }
+  }
+</style>
+<script id="app-format-refresh-js">
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+  var tools = document.querySelector('#bar .tools');
+  if (!tools || !$('stage') || $('prefsBtn')) return;
+  var prefsBtn = document.createElement('button');
+  prefsBtn.id='prefsBtn'; prefsBtn.type='button'; prefsBtn.className='btn'; prefsBtn.title='Preferencias'; prefsBtn.setAttribute('aria-label','Abrir preferencias'); prefsBtn.setAttribute('aria-haspopup','dialog'); prefsBtn.textContent='⚙';
+  tools.insertBefore(prefsBtn, tools.querySelector('.count'));
+
+  var backdrop=document.createElement('div'); backdrop.className='prefs-backdrop'; backdrop.id='prefsBackdrop'; backdrop.innerHTML='<section class="prefs-panel" role="dialog" aria-modal="true" aria-labelledby="prefsTitle"><div class="prefs-heading"><h2 id="prefsTitle">Preferencias</h2><button class="btn" id="prefsClose" type="button" aria-label="Cerrar preferencias">×</button></div><div class="prefs-label">Idiomas visibles</div><div class="prefs-controls" id="prefsLangs"></div><div class="prefs-label">Tamaño del texto</div><div class="prefs-controls" id="prefsSize"></div><div class="prefs-label">Presentación</div><div class="prefs-controls" id="prefsDisplay"></div><div class="prefs-label">Transición del día</div><div class="prefs-transition"><label for="transitionTime"><b>Hora de transición</b><small>Antes de esta hora, Vísperas y Medianoche usan el mismo día. Después, Medianoche pasa al día siguiente.</small></label><input type="time" id="transitionTime" value="18:00"></div><p class="prefs-hint">Consejo: durante el servicio, usa las flechas del teclado o desliza a izquierda/derecha en el teléfono para avanzar o volver. Pulsa Escape para cerrar estas preferencias.</p></section>';
+  document.body.appendChild(backdrop);
+  try { var savedPrefs = JSON.parse(localStorage.getItem('servicios-prefs') || 'null'); if(savedPrefs && savedPrefs.transitionTime) $('transitionTime').value = savedPrefs.transitionTime; } catch(e) {}
+  [['langs','prefsLangs'],['smaller','prefsSize'],['size','prefsSize'],['bigger','prefsSize'],['fsBtn','prefsDisplay']].forEach(function(pair){var el=$(pair[0]), target=$(pair[1]); if(el&&target) target.appendChild(el);});
+  var close=function(){backdrop.classList.remove('open');prefsBtn.focus();};
+  prefsBtn.addEventListener('click',function(){backdrop.classList.add('open');$('prefsClose').focus();});
+  $('prefsClose').addEventListener('click',close);
+  backdrop.addEventListener('click',function(e){if(e.target===backdrop)close();});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'&&backdrop.classList.contains('open'))close();});
+
+  var stage=$('stage');
+  var prev=document.createElement('button'); prev.type='button'; prev.id='readerPrev'; prev.className='reader-nav'; prev.setAttribute('aria-label','Anterior'); prev.title='Anterior (←)'; prev.textContent='‹';
+  var next=document.createElement('button'); next.type='button'; next.id='readerNext'; next.className='reader-nav'; next.setAttribute('aria-label','Siguiente'); next.title='Siguiente (→)'; next.textContent='›';
+  var bottom=document.createElement('div'); bottom.className='reader-bottom-nav'; bottom.innerHTML='<button type="button" id="readerPrevMobile">← Anterior</button><button type="button" id="readerNextMobile">Siguiente →</button>';
+  stage.appendChild(prev); stage.appendChild(next); stage.appendChild(bottom);
+  function callNav(id){var b=$(id); if(b) b.click();}
+  // Existing reader already implements next()/prev() for keyboard navigation; reuse those paths.
+  prev.addEventListener('click',function(e){e.stopPropagation();document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true}));});
+  next.addEventListener('click',function(e){e.stopPropagation();document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}));});
+  $('readerPrevMobile').addEventListener('click',function(e){e.stopPropagation();prev.click();});
+  $('readerNextMobile').addEventListener('click',function(e){e.stopPropagation();next.click();});
+  // Mark the active reader view for layout and hide presentation arrows on menu screens.
+  var mo=new MutationObserver(function(){var active=!stage.hidden; document.body.classList.toggle('reading-active',active);});
+  mo.observe(stage,{attributes:true,attributeFilter:['hidden','class']});
+  document.body.classList.toggle('reading-active',!stage.hidden);
+})();
+</script>
+
+
+<style id="unified-menu-layout-fix">
+/* Unified compact menu: service tabs remain at the top on EVERY service. */
+.menu-view:not([hidden]) { overflow:hidden !important; }
+.menu-inner { box-sizing:border-box; width:100% !important; max-width:none !important; height:100%; min-height:0 !important; display:flex; flex-direction:column; gap:8px !important; }
+.menu-inner > .diocese, .menu-inner > .cross { display:none !important; }
+.menu-inner > .tabs { order:0; flex:0 0 auto; display:flex; flex-wrap:nowrap; gap:6px; overflow-x:auto; overflow-y:hidden; max-width:100%; padding:2px 1px 7px; border-bottom:1px solid var(--rule); scrollbar-width:thin; }
+.menu-inner > .tabs button { flex:0 0 auto; min-height:34px; padding:7px 12px; font-size:13px; line-height:1.1; white-space:nowrap; }
+.menu-inner > .menu-title { display:none !important; }
+.menu-workspace { order:1; display:grid; grid-template-columns:minmax(220px, 28%) minmax(0,1fr); gap:12px; flex:1 1 auto; min-height:0; overflow:hidden; }
+.menu-sidebar { display:flex; flex-direction:column; align-items:stretch; gap:7px; min-width:0; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:2px 8px 8px 1px; border-right:1px solid var(--rule); }
+.menu-main { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+.menu-sidebar .bishop-switch { flex:0 0 auto; width:100%; min-height:38px; padding:7px 9px; justify-content:flex-start; gap:8px; font-size:13px; }
+.menu-sidebar .bishop-switch b { font-size:13px; }
+.menu-sidebar .bishop-switch small { font-size:10px; }
+.menu-sidebar .bishop-switch .knob { transform:scale(.8); transform-origin:left center; margin-right:-5px; }
+.menu-sidebar .office { display:flex; flex-direction:column; gap:4px; flex:0 0 auto; }
+.menu-sidebar .office button { min-height:34px; padding:6px 9px; text-align:left; justify-content:flex-start; gap:2px; border-radius:9px; }
+.menu-sidebar .office button b { font-size:13px; }
+.menu-sidebar .office button small { font-size:10px; }
+.menu-sidebar .rdate { flex:0 0 auto; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px; padding:8px; margin:0; border-radius:12px; }
+.menu-sidebar .rdate label { grid-column:1 / -1; display:flex; align-items:baseline; justify-content:space-between; gap:6px; }
+.menu-sidebar .rdate label b { font-size:13px; }
+.menu-sidebar .rdate label small { font-size:10px; }
+.menu-sidebar .rdate input { min-width:0; width:100%; max-width:100%; padding:6px; font-size:12px; }
+.menu-sidebar .rdate .today { padding:5px 7px; font-size:11px; }
+.menu-sidebar .rdate .rinfo { grid-column:1 / -1; font-size:11px; line-height:1.35; }
+.menu-sidebar .service-part-list { display:flex; flex-direction:column; gap:5px; min-height:0; overflow-y:auto; border:0; border-top:1px solid var(--rule); padding:7px 0 0; }
+.menu-sidebar .partbtn { flex:0 0 auto; padding:9px 10px; text-align:left; align-items:flex-start; border-radius:9px; }
+.menu-sidebar .partbtn b { font-size:14px; line-height:1.2; }
+.menu-sidebar .partbtn span { font-size:10px; }
+.menu-main .service-part-content { display:flex; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+.menu-main .part-heading { flex:0 0 auto; padding:2px 8px 8px; }
+.menu-main .part-heading h2 { margin:0; font-size:clamp(20px,2vw,30px); }
+.menu-main .part-heading p { margin:2px 0 0; font-size:12px; }
+.menu-main .list { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; }
+.menu-main .item { padding:10px 9px; }
+.menu-main .item .es { font-size:clamp(16px,1.5vw,21px); line-height:1.2; }
+.menu-main .item .en { font-size:12px; line-height:1.25; }
+.menu-main > .hint, .menu-main .service-part-content > .hint { flex:0 0 auto; margin:4px 0 0; padding:5px 7px; font-size:11px; }
+.menu-workspace > .menu-main > .part { flex:0 0 auto; }
+@media (max-width:700px) {
+  .menu-inner { gap:6px !important; }
+  .menu-inner > .tabs { gap:5px; padding-bottom:5px; }
+  .menu-inner > .tabs button { min-height:32px; padding:6px 9px; font-size:12px; }
+  .menu-workspace { grid-template-columns:minmax(125px, 34%) minmax(0,1fr); gap:7px; }
+  .menu-sidebar { gap:5px; padding-right:6px; }
+  .menu-sidebar .bishop-switch { padding:6px; gap:4px; min-height:34px; }
+  .menu-sidebar .bishop-switch b { font-size:11px; }
+  .menu-sidebar .bishop-switch small { font-size:9px; }
+  .menu-sidebar .office button { padding:5px 6px; min-height:30px; }
+  .menu-sidebar .office button b { font-size:11px; }
+  .menu-sidebar .office button small { font-size:9px; }
+  .menu-sidebar .rdate { padding:6px; gap:4px; }
+  .menu-sidebar .rdate label { display:block; }
+  .menu-sidebar .rdate label b { font-size:11px; }
+  .menu-sidebar .rdate label small { display:block; font-size:9px; }
+  .menu-sidebar .rdate input { font-size:10px; padding:5px 2px; }
+  .menu-sidebar .rdate .today { font-size:10px; padding:4px; }
+  .menu-sidebar .rdate .rinfo { font-size:9px; }
+  .menu-sidebar .partbtn { padding:7px 6px; }
+  .menu-sidebar .partbtn b { font-size:12px; }
+  .menu-sidebar .partbtn span { display:none; }
+  .menu-main .part-heading { padding:1px 5px 6px; }
+  .menu-main .part-heading h2 { font-size:18px; }
+  .menu-main .part-heading p { font-size:10px; }
+  .menu-main .item { grid-template-columns:minmax(0,1fr); padding:8px 5px; }
+  .menu-main .item .es { font-size:15px; }
+  .menu-main .item .en { font-size:10px; }
+  .menu-main .item .cop, .menu-main .item .ar { font-size:14px; }
+  .menu-main .hint, .menu-main .service-part-content > .hint { display:none; }
+}
+@media (max-width:390px) {
+  .menu-workspace { grid-template-columns:minmax(105px, 32%) minmax(0,1fr); gap:5px; }
+  .menu-inner > .tabs button { font-size:11px; padding:6px 8px; }
+  .menu-sidebar .bishop-switch small { display:none; }
+  .menu-sidebar .rdate .today { grid-column:1 / -1; }
+}
+</style>
+<script id="unified-menu-layout-fix-js">
+(function(){
+  var root=document.getElementById('menuView');
+  if(!root) return;
+  function arrange(){
+    var inner=root.querySelector('.menu-inner');
+    if(!inner || inner.querySelector(':scope > .menu-workspace')) return;
+    var tabs=inner.querySelector(':scope > .tabs');
+    var bishop=inner.querySelector(':scope > .bishop-switch');
+    var offices=Array.prototype.slice.call(inner.querySelectorAll(':scope > .office'));
+    var date=inner.querySelector(':scope > .rdate');
+    var title=inner.querySelector(':scope > .menu-title');
+    var split=inner.querySelector(':scope > .service-split');
+    var list=inner.querySelector(':scope > .list');
+    var hint=inner.querySelector(':scope > .hint');
+    var workspace=document.createElement('div'); workspace.className='menu-workspace';
+    var sidebar=document.createElement('aside'); sidebar.className='menu-sidebar'; sidebar.setAttribute('aria-label','Opciones del servicio');
+    var main=document.createElement('section'); main.className='menu-main'; main.setAttribute('aria-label','Contenido del servicio');
+    if(bishop) sidebar.appendChild(bishop);
+    offices.forEach(function(el){sidebar.appendChild(el);});
+    if(date) sidebar.appendChild(date);
+    if(split){
+      var partList=split.querySelector('.service-part-list');
+      var partContent=split.querySelector('.service-part-content');
+      if(partList) sidebar.appendChild(partList);
+      if(partContent) main.appendChild(partContent);
+      split.remove();
+    } else {
+      if(list) main.appendChild(list);
+      if(hint) main.appendChild(hint);
+    }
+    if(title) title.remove();
+    workspace.appendChild(sidebar); workspace.appendChild(main);
+    if(tabs) tabs.insertAdjacentElement('afterend',workspace); else inner.appendChild(workspace);
+  }
+  var observer=new MutationObserver(function(){arrange();});
+  observer.observe(root,{childList:true,subtree:true});
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',arrange); else arrange();
+})();
+</script>
+
+
+<style id="calendar-transition-improvements">
+.menu-sidebar .rdate { padding:6px 7px !important; gap:4px !important; }
+.menu-sidebar .rdate .rinfo { font-size:10px; line-height:1.25; }
+.menu-sidebar .rdate .rinfo small { display:none !important; }
+.transition-setting { flex:0 0 auto; display:grid; grid-template-columns:minmax(0,1fr) 88px; gap:5px 8px; align-items:center; padding:7px 8px; border:1px solid var(--rule); border-radius:10px; background:var(--panel,rgba(127,127,127,.04)); }
+.transition-setting label { display:flex; flex-direction:column; min-width:0; }
+.transition-setting label b { font-size:12px; }
+.transition-setting label small { font-size:10px; color:var(--muted); }
+.transition-setting input { width:100%; min-width:0; box-sizing:border-box; padding:5px; border:1px solid var(--rule); border-radius:7px; background:var(--bg); color:var(--ink); font:inherit; font-size:12px; }
+.transition-setting p { grid-column:1/-1; margin:0; color:var(--muted); font-size:10px; line-height:1.3; }
+@media(max-width:700px){ .transition-setting { grid-template-columns:minmax(0,1fr) 72px; padding:6px; } .transition-setting label b{font-size:11px}.transition-setting p{font-size:9px} }
+</style>
+
+
+<style id="preferences-transition-setting-css">
+.prefs-transition { display:grid; grid-template-columns:minmax(0,1fr) 112px; align-items:center; gap:12px; padding:12px; border:1px solid var(--rule); border-radius:12px; background:var(--panel,rgba(127,127,127,.04)); }
+.prefs-transition label { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.prefs-transition label b { font-size:14px; }
+.prefs-transition label small { color:var(--muted); font-size:12px; line-height:1.35; }
+.prefs-transition input { width:100%; box-sizing:border-box; padding:8px; border:1px solid var(--rule); border-radius:8px; color:var(--ink); background:var(--bg); font:inherit; }
+@media(max-width:500px){ .prefs-transition { grid-template-columns:minmax(0,1fr) 96px; gap:8px; padding:9px; } .prefs-transition label b{font-size:13px}.prefs-transition label small{font-size:11px} }
+</style>
 
 </body></html>
